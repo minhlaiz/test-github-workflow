@@ -1,0 +1,71 @@
+name: Pull Request
+on:
+  pull_request:
+    types:
+      - 'opened'
+      - 'synchronize'
+      - 'reopened'
+    paths-ignore:
+      - 'infra/**'
+      - '.github/**'
+
+env:
+  PR_NUMBER: ${{ github.event.number }}
+  # NETLIFY_SITE_ID: ${{ secrets.NETLIFY_SITE_ID }}
+  # NETLIFY_AUTH_TOKEN: ${{ secrets.NETLIFY_AUTH_TOKEN }}
+
+concurrency:
+  group: pr-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  lint:
+    name: Lint & Type Check
+    runs-on: self-hosted
+    permissions:
+      contents: read
+      pull-requests: write
+    steps:
+      - name: Set Node.js 18.x
+        uses: actions/setup-node@v3
+        with:
+          node-version: 18.x
+
+      - uses: pnpm/action-setup@v3
+        with:
+            version: 8
+            run_install: false
+
+      - uses: actions/checkout@master
+
+      - name: Get pnpm store directory
+        shell: bash
+        run: |
+          echo "STORE_PATH=$(pnpm store path --silent)" >> $GITHUB_ENV
+
+      - uses: actions/cache@v3
+        name: Setup pnpm cache
+        with:
+          path: ${{ env.STORE_PATH }}
+          key: ${{ runner.os }}-pnpm-store-${{ hashFiles('**/pnpm-lock.yaml') }}
+          restore-keys: |
+            ${{ runner.os }}-pnpm-store-
+
+      - run: pnpm install || true
+
+      - name: Setup reviewdog
+        uses: reviewdog/action-setup@v1
+
+      - name: Reviewdog - Type Check
+        env:
+          REVIEWDOG_GITHUB_API_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          pnpm run type-check | reviewdog -f=tsc -diff="git diff" -reporter=github-pr-review -name="typecheck" -level=warning
+
+      - name: Run reviewdog
+        env:
+          REVIEWDOG_GITHUB_API_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          pnpm run lint:ci -f checkstyle | reviewdog -f=checkstyle -diff="git diff" -reporter=github-pr-review -name="eslint" -level=warning
+
+      - run: pnpm build
